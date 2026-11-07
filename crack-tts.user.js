@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 TTS
 // @namespace    crack-tts
-// @version      0.3.0
+// @version      0.4.0
 // @description  크랙 답변을 Gemini 3.8 TTS로 읽습니다. 나레이션과 등장인물 음성을 나누고 목소리를 직접 꾸밀 수 있습니다.
 // @license      GPL-3.0
 // @homepageURL  https://github.com/OrangeIsOrang/crack-tts
@@ -183,6 +183,33 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
 
     const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 
+    // 공유 코드: 나레이션·인물별 목소리·쓰인 내 목소리만 담는다. API 키는 담지 않는다.
+    // [](…) 꼴은 크랙 본문에서 빈 링크라 화면에 안 보인다.
+    function makeShare({ title, narr, cast, mine }) {
+        const used = new Set([narr.voice, ...Object.values(cast).map(c => c.voice)]);
+        const json = JSON.stringify({ title, narr, cast, mine: mine.filter(m => used.has(m.id)) });
+        return `[](CTTS1:${btoa(String.fromCharCode(...enc.encode(json)))})`;
+    }
+
+    // 남이 만든 글이므로 값을 하나씩 검사해 아는 형태만 받는다. 앞뒤 글이 섞여 있어도 코드만 찾는다.
+    function parseShare(text) {
+        const code = /CTTS1:([A-Za-z0-9+/=]{1,60000})/.exec(String(text ?? ''));
+        if (!code) throw new Error('공유 코드를 찾지 못했습니다.');
+        let j;
+        try { j = JSON.parse(new TextDecoder().decode(unb64(code[1]))); } catch { throw new Error('공유 코드가 깨졌습니다.'); }
+        const line = (v, n) => String(v ?? '').trim().slice(0, n);
+        const isBase = id => Object.hasOwn(VOICES.female, id) || Object.hasOwn(VOICES.male, id);
+        const mine = (Array.isArray(j?.mine) ? j.mine : []).slice(0, 40)
+            .filter(m => /^my_[a-z0-9]{1,32}$/.test(m?.id) && isBase(m.base) && line(m.name, 24))
+            .map(m => ({ id: m.id, name: line(m.name, 24), base: m.base, style: line(m.style, 300) }));
+        const known = id => isBase(id) || mine.some(m => m.id === id);
+        const cast = Object.fromEntries(Object.entries(j?.cast ?? {}).slice(0, 80).filter(([n, c]) => line(n, 40) && known(c?.voice))
+            .map(([n, c]) => [line(n, 40), { voice: c.voice, gender: ['female', 'male'].includes(c.gender) ? c.gender : 'unknown', style: line(c.style, 300) }]));
+        const narr = known(j?.narr?.voice) ? { voice: j.narr.voice, style: line(j.narr.style, 300) } : null;
+        if (!narr && !Object.keys(cast).length) throw new Error('공유 코드에 쓸 수 있는 목소리가 없습니다.');
+        return { title: line(j?.title, 60), narr, cast, mine };
+    }
+
     // WAV 머리가 붙어 와도, 맨 PCM으로 와도 읽는다.
     function pcmOf(bytes, mime) {
         const tag = (p) => String.fromCharCode(...bytes.subarray(p, p + 4));
@@ -226,7 +253,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
     }
 
     if (typeof document === 'undefined') {
-        module.exports = { parseLines, parseLabels, isHud, turnsOf, splitLong, assignVoice, resolveVoice, batch, ttsBody, pcmOf, audioOf, parseReply, takeEvents, evenPcm, NARR, FALLBACK, MAX_BYTES, VOICES };
+        module.exports = { parseLines, parseLabels, isHud, turnsOf, splitLong, assignVoice, resolveVoice, batch, ttsBody, pcmOf, audioOf, parseReply, takeEvents, evenPcm, makeShare, parseShare, NARR, FALLBACK, MAX_BYTES, VOICES };
         return;
     }
 
@@ -235,12 +262,21 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
     const sleep = ms => new Promise(r => setTimeout(r, ms));
     const settings = () => ({ model: MODELS[0][0], narrator: 'Aoede', narrStyle: NARR_STYLE, skip: '', read: 'all', ...GM_getValue('set', {}) });
     const saveSettings = patch => GM_setValue('set', { ...settings(), ...patch });
-    const storyKey = () => 'cast:' + (/\/(?:stories|characters)\/([a-f0-9]+)/.exec(location.pathname)?.[1] ?? 'etc');
+    const storyId = () => /\/(?:stories|characters)\/([a-f0-9]+)/.exec(location.pathname)?.[1];
+    const storyKey = () => 'cast:' + (storyId() ?? 'etc');
     const loadCast = () => GM_getValue(storyKey(), {});
     const saveCast = cast => GM_setValue(storyKey(), cast);
     const loadMine = () => GM_getValue('myVoices', []);
     const saveMine = mine => GM_setValue('myVoices', mine);
-    const narrVoice = (set = settings()) => resolveVoice(set.narrator, [set.narrStyle], loadMine());
+    // 나레이션은 공통 설정을 쓰고, 공유 코드를 적용한 작품은 그 작품 값이 앞선다.
+    const narrKey = () => 'narr:' + (storyId() ?? 'etc');
+    const loadNarr = () => { const set = settings(); return { voice: set.narrator, style: set.narrStyle, ...GM_getValue(narrKey(), null) }; };
+    function saveNarr(patch) {
+        const own = GM_getValue(narrKey(), null);
+        if (own) return GM_setValue(narrKey(), { ...own, ...patch });
+        saveSettings({ ...(patch.voice ? { narrator: patch.voice } : {}), ...(patch.style !== undefined ? { narrStyle: patch.style } : {}) });
+    }
+    const narrVoice = () => { const n = loadNarr(); return resolveVoice(n.voice, [n.style], loadMine()); };
     const castVoice = (c, mine = loadMine()) => resolveVoice(c.voice, [TALK_STYLE, c.style], mine);
 
     function skipRe() {
@@ -446,8 +482,8 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         for (const p of parts) if (p.speaker && labels.has(p.q)) genderOf.set(p.speaker, labels.get(p.q).gender); // 「이름 | 대사」 줄도 성별은 라벨에서
         const mine = loadMine();
         const speak = s => {
-            if (s === NARR) return narrVoice(set);
-            assignVoice(cast, s, genderOf.get(s) ?? 'unknown', set.narrator);
+            if (s === NARR) return narrVoice();
+            assignVoice(cast, s, genderOf.get(s) ?? 'unknown', loadNarr().voice);
             return castVoice(cast[s], mine);
         };
         const turns = turnsOf(parts, labels).filter(t => set.read !== 'talk' || t.speaker !== NARR);
@@ -517,6 +553,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         close: '<path d="M18 6 6 18M6 6l12 12"/>',
         trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/>',
         plus: '<path d="M12 5v14M5 12h14"/>',
+        share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
     };
     function icon(name) {
         const s = el('span', { className: 'ctts-ico', attrs: { 'aria-hidden': 'true' } });
@@ -573,11 +610,11 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
     const card = (head, ...body) => el('section', { className: 'ctts-card' }, el('div', { className: 'ctts-card-head' }, ...head), ...body);
 
     function narratorCard() {
-        const set = settings();
-        const s = voiceSelect(set.narrator, narrator => saveSettings({ narrator }), '나레이션 목소리');
+        const n = loadNarr();
+        const s = voiceSelect(n.voice, voice => saveNarr({ voice }), '나레이션 목소리');
         const say = iconBtn('play', '나레이션 들어 보기', () => preview(narrVoice(), SAMPLE_NARR, say));
         return card([avatar('나'), el('strong', { textContent: '나레이션' }), el('span', { className: 'ctts-tag', textContent: '따옴표 밖 글' }), say],
-            field('목소리', s), field('말투', styleBox(set.narrStyle, narrStyle => saveSettings({ narrStyle }), '예: 낮고 차분하게, 소설을 낭독하듯')));
+            field('목소리', s), field('말투', styleBox(n.style, style => saveNarr({ style }), '예: 낮고 차분하게, 소설을 낭독하듯')));
     }
 
     function castCard(name, c) {
@@ -653,7 +690,68 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         ];
     }
 
-    const NAV = [['cast', '등장인물', 'users', castTab], ['mine', '내 목소리', 'mic', mineTab], ['set', '설정', 'sliders', setTab]];
+    function applyShare(share) {
+        saveMine([...loadMine().filter(m => !share.mine.some(x => x.id === m.id)), ...share.mine]);
+        saveCast({ ...loadCast(), ...share.cast });
+        if (share.narr) GM_setValue(narrKey(), share.narr);
+    }
+
+    async function creatorCode() {
+        const id = storyId();
+        if (!id) throw new Error('채팅 화면에서만 찾을 수 있습니다.');
+        const r = await fetch(`https://crack-api.wrtn.ai/crack-api/stories/${id}`, { credentials: 'omit' }); // 공개 작품 정보라 로그인 정보를 보내지 않는다.
+        if (!r.ok) throw new Error('작품 정보를 읽지 못했습니다.');
+        const j = await r.json(), d = j?.data ?? j;
+        return [d?.description, d?.detailDescription, d?.simpleDescription].join('\n');
+    }
+
+    function shareTab() {
+        const result = el('div', { className: 'ctts-share-result', attrs: { role: 'status' } });
+        const showShare = text => {
+            let share;
+            try { share = parseShare(text); }
+            catch (error) { return result.replaceChildren(el('p', { className: 'ctts-note', textContent: error.message })); }
+            result.replaceChildren(
+                el('p', { className: 'ctts-share-title', textContent: `${share.title || '제목 없음'} · 등장인물 ${Object.keys(share.cast).length}명 · 내 목소리 ${share.mine.length}개` }),
+                el('ul', {}, ...(share.narr ? [['나레이션', share.narr.voice]] : []).concat(Object.entries(share.cast).map(([n, c]) => [n, c.voice])).map(([n, v]) =>
+                    el('li', { textContent: `${n} → ${share.mine.find(m => m.id === v)?.name ?? v}` }))),
+                el('button', { type: 'button', className: 'ctts-primary', textContent: '이 작품에 적용', onclick: () => {
+                    applyShare(share);
+                    panel.show('cast');
+                    toast('제작자 목소리를 적용했습니다');
+                } }));
+        };
+        const find = el('button', { type: 'button', className: 'ctts-primary', textContent: '이 작품에서 찾기', onclick: async () => {
+            find.disabled = true;
+            try { showShare(await creatorCode()); }
+            catch (error) { result.replaceChildren(el('p', { className: 'ctts-note', textContent: error.message })); }
+            find.disabled = false;
+        } });
+        const paste = el('textarea', { rows: 2, placeholder: '받은 공유 코드를 붙여 넣으세요', attrs: { 'aria-label': '공유 코드 붙여넣기' } });
+        const load = el('button', { type: 'button', className: 'ctts-ghost', textContent: '코드 불러오기', onclick: () => showShare(paste.value) });
+        const out = el('textarea', { rows: 3, readOnly: true, attrs: { 'aria-label': '만든 공유 코드' } });
+        const copy = el('button', { type: 'button', className: 'ctts-ghost', textContent: '복사', disabled: true, onclick: async () => {
+            try { await navigator.clipboard.writeText(out.value); toast('복사했습니다'); }
+            catch { out.select(); toast('자동 복사가 안 됩니다. 코드를 직접 복사해 주세요', true); }
+        } });
+        const make = el('button', { type: 'button', className: 'ctts-primary', textContent: '공유 코드 만들기', onclick: () => {
+            out.value = makeShare({ title: document.title.split('|')[0].trim(), narr: loadNarr(), cast: loadCast(), mine: loadMine() });
+            copy.disabled = false;
+            size.textContent = `코드 길이 ${out.value.length.toLocaleString()}자 · 등장인물 ${Object.keys(loadCast()).length}명`;
+        } });
+        const size = el('small', { textContent: 'API 키는 코드에 들어가지 않습니다. 작품 상세 설명에 코드를 넣으면 독자가 찾기 버튼으로 받을 수 있습니다.' });
+        return [
+            el('h3', { textContent: '목소리 공유' }),
+            el('p', { className: 'ctts-desc', textContent: '제작자가 정한 인물별 목소리를 받아 오거나, 내 설정을 코드로 나눕니다.' }),
+            el('section', { className: 'ctts-card' }, el('strong', { textContent: '제작자 목소리 받기' }),
+                el('div', { className: 'ctts-inline' }, find, load), paste, result,
+                el('small', { textContent: '적용하면 이 작품의 나레이션과 같은 이름의 인물 설정을 덮어씁니다.' })),
+            el('section', { className: 'ctts-card' }, el('strong', { textContent: '내 설정 공유하기' }),
+                el('div', { className: 'ctts-inline' }, make, copy), out, size),
+        ];
+    }
+
+    const NAV = [['cast', '등장인물', 'users', castTab], ['mine', '내 목소리', 'mic', mineTab], ['share', '공유', 'share', shareTab], ['set', '설정', 'sliders', setTab]];
     let panel = null;
     function closePanel() {
         if (!panel) return;
@@ -752,6 +850,13 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         .ctts-inline { display: flex; gap: 8px; }
         .ctts-primary { display: inline-flex; align-items: center; justify-content: center; flex: none; gap: 4px; min-height: 38px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--surface_primary, #fcfcfa); color: var(--bg_screen, #141413); font-size: 14px; font-weight: 700; cursor: pointer; }
         .ctts-primary:disabled { opacity: .6; cursor: progress; }
+        .ctts-ghost { flex: none; min-height: 38px; padding: 0 14px; border: 1px solid var(--outline_secondary, rgba(128,128,128,.4)); border-radius: 8px; background: transparent; color: var(--text_primary, #f0efeb); font-size: 14px; font-weight: 600; cursor: pointer; }
+        .ctts-ghost:disabled { opacity: .5; cursor: default; }
+        .ctts-ghost:focus-visible { outline: 2px solid var(--surface_action_blue_primary, #1a88ff); outline-offset: 1px; }
+        .ctts-share-result:empty { display: none; }
+        .ctts-share-result { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+        .ctts-share-title { margin: 0; font-weight: 700; font-size: 14px; }
+        .ctts-share-result ul { margin: 0; padding-left: 18px; color: var(--text_secondary, #a8a69d); font-size: 13.5px; }
         .ctts-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
         .ctts-chip { min-height: 30px; padding: 0 10px; border: 1px solid var(--outline_secondary, rgba(128,128,128,.35)); border-radius: 999px; background: transparent; color: var(--text_secondary, #a8a69d); font-size: 12.5px; cursor: pointer; transition: background .15s, color .15s; }
         .ctts-chip:hover { background: var(--bg_elevated_primary, #242321); color: var(--text_primary, #f0efeb); }
@@ -766,7 +871,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
             .ctts-shell { height: 100%; border: 0; border-radius: 0; }
             .ctts-layout { flex-direction: column; }
             .ctts-rail { flex-direction: row; width: 100%; padding: 6px 8px; border-right: 0; border-bottom: 1px solid var(--outline_secondary, rgba(128,128,128,.25)); }
-            .ctts-tab { flex: 1; min-height: 44px; flex-direction: row; justify-content: center; gap: 6px; padding: 6px 2px; }
+            .ctts-tab { flex: 1; min-width: 0; min-height: 44px; flex-direction: column; justify-content: center; gap: 2px; padding: 4px 2px; font-size: 12px; }
             .ctts-main { padding: 14px 16px 24px; }
         }
         @media (pointer: coarse) {
