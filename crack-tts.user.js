@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 TTS
 // @namespace    crack-tts
-// @version      0.4.0
+// @version      0.5.0
 // @description  크랙 답변을 Gemini 3.8 TTS로 읽습니다. 나레이션과 등장인물 음성을 나누고 목소리를 직접 꾸밀 수 있습니다.
 // @license      GPL-3.0
 // @homepageURL  https://github.com/OrangeIsOrang/crack-tts
@@ -34,21 +34,19 @@
     const SAMPLE_NARR = '창밖으로 비가 내리고 있었다. 당신은 천천히 고개를 들었다.';
     const SAMPLE_TALK = '안녕하세요. 이 목소리로 읽어 드릴게요.';
     const STYLE_CHIPS = ['낮고 차분하게', '밝고 빠르게', '속삭이듯 작게', '나른하고 느리게', '단호하고 또렷하게', '부끄러운 듯 조심스럽게', '비꼬듯 건조하게'];
+    // 구글 이름: [역할 이름, 높이, 분위기]. 고르기 창의 표기와 거르기에 쓴다.
     const VOICES = {
         female: {
-            Achernar: '부드럽고 여린 고음 · 수줍은 소녀', Aoede: '산뜻한 중음 · 밝고 편한 여성', Autonoe: '또렷하고 활기찬 중음 · 자신감 있는 여성',
-            Callirrhoe: '느긋하고 차분한 중음 · 친근한 여성', Despina: '매끄럽고 우아한 중음 · 기품 있는 여성', Erinome: '맑고 또렷한 중음 · 지적인 여성',
-            Gacrux: '성숙하고 안정된 중음 · 연상·어머니', Kore: '단단하고 힘 있는 중음 · 강단 있는 여성', Laomedeia: '발랄하고 경쾌한 고음 · 명랑한 소녀',
-            Leda: '앳되고 가벼운 고음 · 10대 소녀', Pulcherrima: '직선적이고 중성적인 중음 · 보이시한 인물', Sulafat: '따뜻하고 포근한 중음 · 다정한 여성',
-            Vindemiatrix: '온화하고 잔잔한 중음 · 조용한 여성', Zephyr: '밝고 힘찬 고음 · 쾌활한 여성',
+            Achernar: ['수줍은 소녀', '높음', '부드러움'], Leda: ['앳된 10대', '높음', '밝음'], Laomedeia: ['명랑한 소녀', '높음', '밝음'], Zephyr: ['쾌활한 활력소', '높음', '밝음'],
+            Aoede: ['편안한 친구', '중간', '밝음'], Autonoe: ['자신감 있는 여성', '중간', '밝음'], Callirrhoe: ['느긋한 언니', '중간', '차분'], Despina: ['기품 있는 아가씨', '중간', '차분'],
+            Erinome: ['지적인 비서', '중간', '차분'], Gacrux: ['어른스러운 연상', '중간', '차분'], Sulafat: ['다정한 누나', '중간', '부드러움'], Vindemiatrix: ['조용한 문학소녀', '중간', '부드러움'],
+            Kore: ['강단 있는 리더', '중간', '강함'], Pulcherrima: ['보이시한 소녀', '중간', '강함'],
         },
         male: {
-            Achird: '친근하고 따뜻한 중저음 · 다정한 청년', Algenib: '거칠고 낮은 저음 · 노련한 남성', Algieba: '매끄럽고 여유로운 저음 · 매력적인 남성',
-            Alnilam: '단단하고 권위 있는 중저음 · 지휘관', Charon: '차분한 저음 · 해설자·학자·집사', Enceladus: '숨 섞인 부드러운 저음 · 신비로운 남성',
-            Fenrir: '들뜨고 빠른 중저음 · 열혈 청년', Iapetus: '맑고 깨끗한 중저음 · 믿음직한 남성', Orus: '단호한 중저음 · 군인·보호자',
-            Puck: '경쾌하고 장난기 있는 중음 · 장난꾸러기 소년', Rasalgethi: '또박또박한 중음 · 교사·안내자', Sadachbia: '활기찬 저음 · 호탕한 남성',
-            Sadaltager: '지적이고 확신 있는 중음 · 전문가·참모', Schedar: '고르고 차분한 중저음 · 침착한 남성', Umbriel: '느긋하고 편안한 중저음 · 온화한 남성',
-            Zubenelgenubi: '수수하고 자연스러운 중저음 · 평범한 청년',
+            Puck: ['장난꾸러기 소년', '중간', '밝음'], Fenrir: ['열혈 청년', '중간', '밝음'], Rasalgethi: ['또박또박 선생님', '중간', '차분'], Sadaltager: ['똑똑한 참모', '중간', '차분'],
+            Zubenelgenubi: ['평범한 청년', '중간', '차분'], Iapetus: ['믿음직한 청년', '중간', '차분'], Schedar: ['침착한 남자', '중간', '차분'], Achird: ['다정한 친구', '중간', '부드러움'],
+            Umbriel: ['온화한 남자', '중간', '부드러움'], Alnilam: ['지휘관', '중간', '강함'], Orus: ['군인·경호원', '중간', '강함'], Algieba: ['여유로운 미남', '낮음', '부드러움'],
+            Enceladus: ['신비로운 남자', '낮음', '부드러움'], Charon: ['집사·해설자', '낮음', '차분'], Algenib: ['거친 베테랑', '낮음', '강함'], Sadachbia: ['호탕한 아저씨', '낮음', '밝음'],
         },
     };
     const LABEL_SYSTEM = `You label who speaks each numbered quote in a Korean roleplay reply, for a text-to-speech reader.
@@ -145,6 +143,18 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         const voice = pool.find(v => !used.has(v)) ?? pool[Object.keys(cast).length % pool.length];
         cast[name] = { voice, gender };
         return voice;
+    }
+
+    // 고르기 창에 쓰는 목소리 한 줄: 구글 목소리면 역할 이름, 내 목소리면 내가 붙인 이름.
+    function voiceInfo(id, mine) {
+        const gender = id2 => (Object.hasOwn(VOICES.female, id2) ? '여성' : Object.hasOwn(VOICES.male, id2) ? '남성' : '');
+        const baseOf = id2 => VOICES.female[id2] ?? VOICES.male[id2];
+        const my = mine.find(m => m.id === id);
+        const baseId = my?.base ?? id, base = baseOf(baseId);
+        if (!base) return { id, name: my?.name ?? '지워진 목소리', sub: '기본 목소리로 읽습니다', gender: '', pitch: '', mood: '', mine: !!my };
+        return my
+            ? { id, name: my.name, sub: `내 목소리 · 바탕 ${base[0]}`, gender: gender(baseId), pitch: base[1], mood: base[2], mine: true }
+            : { id, name: base[0], sub: `${base[1]} · ${base[2]} · ${id}`, gender: gender(baseId), pitch: base[1], mood: base[2], mine: false };
     }
 
     // 내 목소리 = 바탕 목소리 + 말투 지시문. 지워진 내 목소리는 기본 목소리로 읽는다.
@@ -253,7 +263,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
     }
 
     if (typeof document === 'undefined') {
-        module.exports = { parseLines, parseLabels, isHud, turnsOf, splitLong, assignVoice, resolveVoice, batch, ttsBody, pcmOf, audioOf, parseReply, takeEvents, evenPcm, makeShare, parseShare, NARR, FALLBACK, MAX_BYTES, VOICES };
+        module.exports = { parseLines, parseLabels, isHud, turnsOf, splitLong, assignVoice, resolveVoice, batch, ttsBody, pcmOf, audioOf, parseReply, takeEvents, evenPcm, makeShare, parseShare, voiceInfo, NARR, FALLBACK, MAX_BYTES, VOICES };
         return;
     }
 
@@ -553,6 +563,8 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         close: '<path d="M18 6 6 18M6 6l12 12"/>',
         trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/>',
         plus: '<path d="M12 5v14M5 12h14"/>',
+        next: '<path d="m9 6 6 6-6 6"/>',
+        back: '<path d="m15 6-6 6 6 6"/>',
         share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
     };
     function icon(name) {
@@ -579,17 +591,52 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         toastTimer = setTimeout(() => t.remove(), bad ? 12000 : 5000);
     }
 
-    const voiceLine = (id, desc) => [id, `${id} · ${desc}`];
-    function voiceSelect(value, onchange, label, withMine = true) {
-        const group = (name, items) => el('optgroup', { label: name }, ...items.map(([v, textContent]) => el('option', { value: v, textContent })));
-        const mine = withMine ? loadMine() : [];
-        const s = el('select', { onchange: () => onchange(s.value), attrs: { 'aria-label': label } },
-            mine.length ? group('내 목소리', mine.map(m => [m.id, `${m.name} · 바탕 ${m.base}`])) : null,
-            group('여성', Object.entries(VOICES.female).map(e => voiceLine(...e))),
-            group('남성', Object.entries(VOICES.male).map(e => voiceLine(...e))));
-        s.value = value;
-        return s;
+    // 지금 값을 보여 주는 버튼. 누르면 패널 안에서 고르기 화면으로 넘어간다.
+    function voicePicker(options) {
+        const info = voiceInfo(options.value, loadMine());
+        return el('button', { type: 'button', className: 'ctts-voice-btn', onclick: () => openPicker(options), attrs: { 'aria-label': `${options.title} 목소리 고르기, 지금 ${info.name}` } },
+            el('span', { className: 'ctts-voice-text' }, el('b', { textContent: info.name }), el('small', { textContent: info.sub })), icon('next'));
     }
+
+    function openPicker({ value, title, gender, styles, sample, self, withMine = true, onPick }) {
+        const back = { tab: panel.tab, top: panel.main.scrollTop };
+        const leave = () => { panel.back = null; panel.show(back.tab); panel.main.scrollTop = back.top; };
+        panel.back = leave;
+        const mine = loadMine();
+        const ids = [...(withMine ? mine.map(m => m.id) : []), ...Object.keys(VOICES.female), ...Object.keys(VOICES.male)];
+        const items = ids.map(id => voiceInfo(id, mine));
+        const used = new Map([[loadNarr().voice, '나레이션'], ...Object.entries(loadCast()).map(([n, c]) => [c.voice, n])]);
+        const filter = { gender: { female: '여성', male: '남성' }[gender] ?? '', pitch: '', mood: '' };
+        const count = el('span', { className: 'ctts-pick-count', attrs: { role: 'status' } });
+        const list = el('div', { className: 'ctts-voice-grid' });
+        const chips = [];
+        const row = (label, key, names) => el('div', { className: 'ctts-filter' }, el('span', { textContent: label }), ...names.map(name => {
+            const chip = el('button', { type: 'button', className: 'ctts-chip', textContent: name, onclick: () => { filter[key] = filter[key] === name ? '' : name; draw(); } });
+            chips.push([chip, key, name]);
+            return chip;
+        }));
+        function draw() {
+            for (const [chip, key, name] of chips) chip.setAttribute('aria-pressed', filter[key] === name);
+            const shown = items.filter(v => Object.entries(filter).every(([k, f]) => !f || v[k] === f));
+            count.textContent = `${shown.length}개`;
+            list.replaceChildren(...shown.map(v => {
+                const who = used.get(v.id);
+                const say = iconBtn('play', v.name + ' 들어 보기', () => preview(resolveVoice(v.id, styles, mine), sample, say), 'ctts-round');
+                const choose = el('button', { type: 'button', className: 'ctts-voice-pick', onclick: () => { onPick(v.id); leave(); }, attrs: { 'aria-pressed': v.id === value } },
+                    el('span', { className: 'ctts-voice-text' }, el('b', { textContent: v.name }), el('small', { textContent: v.sub })),
+                    who && who !== self ? el('span', { className: 'ctts-used', textContent: who }) : null);
+                return el('div', { className: 'ctts-voice-row', attrs: v.id === value ? { 'data-on': '1' } : {} }, say, choose);
+            }), ...(shown.length ? [] : [el('p', { className: 'ctts-empty', textContent: '조건에 맞는 목소리가 없습니다. 칩을 하나 꺼 보세요.' })]));
+        }
+        const head = iconBtn('back', '돌아가기', leave);
+        panel.main.replaceChildren(
+            el('div', { className: 'ctts-pick-head' }, head, el('h3', { textContent: `${title} 목소리 고르기` }), count),
+            row('성별', 'gender', ['여성', '남성']), row('높이', 'pitch', ['높음', '중간', '낮음']), row('분위기', 'mood', ['밝음', '차분', '부드러움', '강함']), list);
+        panel.main.scrollTop = 0;
+        draw();
+        head.focus();
+    }
+
     const field = (label, control, hint) => el('label', { className: 'ctts-field' }, el('span', { className: 'ctts-label', textContent: label }), control, hint ? el('small', { textContent: hint }) : null);
 
     function styleBox(value, onchange, placeholder) {
@@ -611,7 +658,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
 
     function narratorCard() {
         const n = loadNarr();
-        const s = voiceSelect(n.voice, voice => saveNarr({ voice }), '나레이션 목소리');
+        const s = voicePicker({ value: n.voice, title: '나레이션', styles: [n.style], sample: SAMPLE_NARR, self: '나레이션', onPick: voice => saveNarr({ voice }) });
         const say = iconBtn('play', '나레이션 들어 보기', () => preview(narrVoice(), SAMPLE_NARR, say));
         return card([avatar('나'), el('strong', { textContent: '나레이션' }), el('span', { className: 'ctts-tag', textContent: '따옴표 밖 글' }), say],
             field('목소리', s), field('말투', styleBox(n.style, style => saveNarr({ style }), '예: 낮고 차분하게, 소설을 낭독하듯')));
@@ -619,7 +666,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
 
     function castCard(name, c) {
         const patch = p => { const all = loadCast(); Object.assign(all[name], p); saveCast(all); };
-        const s = voiceSelect(c.voice, voice => patch({ voice }), name + ' 목소리');
+        const s = voicePicker({ value: c.voice, title: name, gender: c.gender, styles: [TALK_STYLE, c.style], sample: SAMPLE_TALK, self: name, onPick: voice => patch({ voice }) });
         const say = iconBtn('play', name + ' 들어 보기', () => preview(castVoice(loadCast()[name]), SAMPLE_TALK, say));
         const del = iconBtn('trash', name + ' 삭제', () => { const all = loadCast(); delete all[name]; saveCast(all); panel.show('cast'); }, 'ctts-danger');
         return card([avatar(name), el('strong', { textContent: name }), el('span', { className: 'ctts-tag', textContent: { female: '여성', male: '남성' }[c.gender] ?? '성별 모름' }), say, del],
@@ -643,7 +690,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         const say = iconBtn('play', m.name + ' 들어 보기', () => { const now = loadMine().find(x => x.id === m.id); preview(resolveVoice(now.id, [TALK_STYLE], [now]), SAMPLE_TALK, say); });
         const del = iconBtn('trash', m.name + ' 삭제', () => { saveMine(loadMine().filter(x => x.id !== m.id)); panel.show('mine'); }, 'ctts-danger');
         return card([avatar(m.name), name, say, del],
-            field('바탕 목소리', voiceSelect(m.base, base => patch({ base }), '바탕 목소리', false)),
+            field('바탕 목소리', voicePicker({ value: m.base, title: m.name + ' 바탕', styles: [TALK_STYLE, m.style], sample: SAMPLE_TALK, withMine: false, onPick: base => patch({ base }) })),
             field('말투 지시', styleBox(m.style, style => patch({ style }), '예: 30대 여성, 낮고 느리게, 문장 끝을 살짝 내림')));
     }
 
@@ -766,6 +813,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         const tabs = NAV.map(([id, label, name]) => el('button', { type: 'button', className: 'ctts-tab', onclick: () => show(id) }, icon(name), el('span', { textContent: label })));
         function show(id) {
             NAV.forEach(([n], i) => (n === id ? tabs[i].setAttribute('aria-current', 'page') : tabs[i].removeAttribute('aria-current')));
+            if (panel) Object.assign(panel, { tab: id, back: null });
             main.replaceChildren(...NAV.find(([n]) => n === id)[3]().filter(Boolean));
             main.scrollTop = 0;
         }
@@ -777,7 +825,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         const overlay = el('div', { id: 'ctts-panel', onmousedown: e => { if (e.target === overlay) closePanel(); } }, shell);
         overlay.addEventListener('keydown', e => {
             e.stopPropagation(); // 크랙 단축키가 입력을 가로채지 않게
-            if (e.key === 'Escape') return closePanel();
+            if (e.key === 'Escape') return panel?.back ? panel.back() : closePanel();
             if (e.key !== 'Tab') return;
             const list = [...shell.querySelectorAll('button:not(:disabled),input,select,textarea')].filter(x => x.offsetParent);
             const first = list[0], last = list[list.length - 1];
@@ -785,7 +833,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
             else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
         });
         document.body.append(overlay);
-        panel = { overlay, opener, show };
+        panel = { overlay, opener, show, main, tab, back: null };
         show(tab);
         close.focus();
     }
@@ -859,11 +907,28 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         .ctts-share-result ul { margin: 0; padding-left: 18px; color: var(--text_secondary, #a8a69d); font-size: 13.5px; }
         .ctts-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
         .ctts-chip { min-height: 30px; padding: 0 10px; border: 1px solid var(--outline_secondary, rgba(128,128,128,.35)); border-radius: 999px; background: transparent; color: var(--text_secondary, #a8a69d); font-size: 12.5px; cursor: pointer; transition: background .15s, color .15s; }
+        .ctts-chip[aria-pressed="true"] { border-color: var(--text_brand, #ff6352); background: var(--surface_brand_tertiary, #311816); color: var(--text_brand, #ff6352); }
         .ctts-chip:hover { background: var(--bg_elevated_primary, #242321); color: var(--text_primary, #f0efeb); }
+        .ctts-voice-btn { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 48px; padding: 6px 10px; border: 1px solid var(--outline_secondary, rgba(128,128,128,.4)); border-radius: 8px; background: var(--bg_elevated_primary, #242321); color: var(--text_primary, #f0efeb); font: inherit; text-align: left; cursor: pointer; transition: background .15s; }
+        .ctts-voice-btn:hover { background: var(--bg_elevated_secondary, #2e2d2b); }
+        .ctts-voice-text { display: flex; flex-direction: column; min-width: 0; }
+        .ctts-voice-text b { font-size: 14px; font-weight: 700; line-height: 1.4; }
+        .ctts-voice-text small { overflow: hidden; color: var(--text_secondary, #a8a69d); font-size: 12.5px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+        .ctts-pick-head { display: flex; align-items: center; gap: 6px; margin: -4px 0 12px -6px; }
+        .ctts-pick-head h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .ctts-pick-count { flex: none; margin-left: auto; color: var(--text_secondary, #a8a69d); font-size: 13px; }
+        .ctts-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+        .ctts-filter > span { flex: none; width: 48px; color: var(--text_secondary, #a8a69d); font-size: 13px; font-weight: 600; }
+        .ctts-voice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 8px; margin-top: 12px; }
+        .ctts-voice-row { display: flex; align-items: center; gap: 4px; min-width: 0; padding: 2px 4px; border: 1px solid var(--outline_secondary, rgba(128,128,128,.3)); border-radius: 10px; background: var(--bg_elevated_secondary, #2e2d2b); }
+        .ctts-voice-row[data-on] { border-color: var(--text_brand, #ff6352); background: var(--surface_brand_tertiary, #311816); }
+        .ctts-round { border-radius: 50%; }
+        .ctts-voice-pick { display: flex; flex: 1; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; min-height: 44px; padding: 4px 6px; border: 0; border-radius: 8px; background: transparent; color: var(--text_primary, #f0efeb); font: inherit; text-align: left; cursor: pointer; }
+        .ctts-used { flex: none; max-width: 76px; overflow: hidden; padding: 1px 7px; border-radius: 999px; background: var(--surface_cracker_tertiary, #2e1e00); color: var(--text_primary, #f0efeb); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
         .ctts-note { margin: 2px 0 0; color: var(--text_action_blue_primary, #94c9f9); font-size: 13.5px; overflow-wrap: anywhere; }
         .ctts-note:empty { display: none; }
         .ctts-note[data-bad="1"] { color: var(--text_brand, #ff6352); }
-        .ctts-btn:focus-visible, .ctts-icon-btn:focus-visible, .ctts-tab:focus-visible, .ctts-chip:focus-visible, .ctts-primary:focus-visible, #ctts-panel select:focus-visible, #ctts-panel input:focus-visible, #ctts-panel textarea:focus-visible { outline: 2px solid var(--surface_action_blue_primary, #1a88ff); outline-offset: 1px; }
+        .ctts-btn:focus-visible, .ctts-icon-btn:focus-visible, .ctts-tab:focus-visible, .ctts-chip:focus-visible, .ctts-primary:focus-visible, .ctts-voice-btn:focus-visible, .ctts-voice-pick:focus-visible, #ctts-panel select:focus-visible, #ctts-panel input:focus-visible, #ctts-panel textarea:focus-visible { outline: 2px solid var(--surface_action_blue_primary, #1a88ff); outline-offset: 1px; }
         #ctts-toast { position: fixed; left: 50%; bottom: 24px; z-index: 100000; transform: translateX(-50%); width: max-content; max-width: min(560px, calc(100vw - 32px)); padding: 11px 16px; border-radius: 10px; background: var(--bg_elevated_secondary, #2e2d2b); color: var(--text_primary, #f0efeb); font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
         #ctts-toast[data-bad="1"] { background: #8c1d18; color: #fff; }
         @media (max-width: 600px) {
