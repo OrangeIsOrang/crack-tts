@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 TTS
 // @namespace    crack-tts
-// @version      0.5.0
+// @version      0.5.1
 // @description  크랙 답변을 Gemini 3.8 TTS로 읽습니다. 나레이션과 등장인물 음성을 나누고 목소리를 직접 꾸밀 수 있습니다.
 // @license      GPL-3.0
 // @homepageURL  https://github.com/OrangeIsOrang/crack-tts
@@ -262,8 +262,31 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         return { pcm: all.subarray(0, n), carry: all.subarray(n) };
     }
 
+    // 구글 429 문구에서 기다릴 시간과 한도를 읽는다. 예: "(limit: 10 requests per day on Free Tier) ... retry in 22h59m22s"
+    function quotaOf(text) {
+        const t = String(text ?? '');
+        const m = /retry in (?:(\d+)h)?\s*(?:(\d+)m(?!s))?\s*(?:([\d.]+)s)?/i.exec(t);
+        const wait = m && (m[1] || m[2] || m[3]) ? Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Math.ceil(Number(m[3] || 0)) : null;
+        const limit = /limit:\s*(\d+)\s*requests?\s*per\s*(day|minute)/i.exec(t);
+        return { wait, daily: /per day/i.test(t), limit: limit ? Number(limit[1]) : null, free: /free tier/i.test(t) };
+    }
+
+    // 남은 초 → "23시간 뒤", "5분 뒤", "1시간 30분 뒤"
+    function leftText(sec) {
+        const min = Math.max(1, Math.ceil(sec / 60)), h = Math.floor(min / 60), m = min % 60;
+        return [h ? h + '시간' : '', m ? m + '분' : ''].filter(Boolean).join(' ') + ' 뒤';
+    }
+
+    // 오래 기다려야 하는 한도면 안내 문구를, 잠깐 기다리면 되는 한도면 null을 준다.
+    function quotaMessage(text) {
+        const q = quotaOf(text);
+        if (!q.daily && !(q.wait > 60)) return null;
+        const which = `${q.free ? '무료 ' : ''}${q.daily ? '하루 ' : ''}한도${q.limit ? `(${q.limit}회)` : ''}`;
+        return `구글 ${which}를 다 썼습니다.` + (q.wait ? ` ${leftText(q.wait)}에 다시 쓸 수 있습니다.` : '') + (q.free ? ' 결제를 연결하면 한도가 늘어납니다.' : '');
+    }
+
     if (typeof document === 'undefined') {
-        module.exports = { parseLines, parseLabels, isHud, turnsOf, splitLong, assignVoice, resolveVoice, batch, ttsBody, pcmOf, audioOf, parseReply, takeEvents, evenPcm, makeShare, parseShare, voiceInfo, NARR, FALLBACK, MAX_BYTES, VOICES };
+        module.exports = { parseLines, parseLabels, isHud, turnsOf, splitLong, assignVoice, resolveVoice, batch, ttsBody, pcmOf, audioOf, parseReply, takeEvents, evenPcm, makeShare, parseShare, voiceInfo, quotaOf, quotaMessage, leftText, NARR, FALLBACK, MAX_BYTES, VOICES };
         return;
     }
 
@@ -303,20 +326,40 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         onload: r => {
             const json = parseReply(r.responseText);
             if (r.status === 200) return ok(json);
-            fail(Object.assign(new Error(`구글 오류 ${r.status}: ${String(json?.error?.message ?? r.responseText).slice(0, 200)}`), { status: r.status }));
+            const raw = String(json?.error?.message ?? r.responseText);
+            const quota = r.status === 429 ? quotaMessage(raw) : null;
+            fail(Object.assign(new Error(quota ?? `구글 오류 ${r.status}: ${raw.slice(0, 200)}`), { status: r.status, wait: quotaOf(raw).wait, quota: !!quota }));
         },
         onerror: () => fail(new Error('구글에 연결하지 못했습니다')),
         ontimeout: () => fail(new Error('구글 응답이 3분 안에 오지 않았습니다')),
     }));
 
+    // 한도가 끝난 모델은 다시 열릴 때까지 요청을 보내지 않고 바로 알린다.
+    const modelOf = (path, body) => body?.model ?? /models\/([^:/]+)/.exec(path)?.[1] ?? '';
+    function quotaBlock(model) {
+        const until = GM_getValue('quota', {})[model];
+        if (!until || until.at <= Date.now()) return null;
+        const tip = until.text.includes('결제') ? ' 결제를 연결하면 한도가 늘어납니다.' : '';
+        return `${until.text.split('.')[0]}. ${leftText((until.at - Date.now()) / 1000)}에 다시 쓸 수 있습니다.${tip}`;
+    }
+    function rememberQuota(model, error) {
+        if (!error.quota || !model) return;
+        const all = GM_getValue('quota', {});
+        all[model] = { at: Date.now() + (error.wait ?? 3600) * 1000, text: error.message };
+        GM_setValue('quota', all);
+    }
+
     async function api(path, body) {
         const key = GM_getValue('apiKey', '');
         if (!key) { openPanel('set'); throw Object.assign(new Error('Gemini API 키를 먼저 넣어 주세요'), { status: 401 }); }
+        const model = modelOf(path, body), blocked = quotaBlock(model);
+        if (blocked) throw Object.assign(new Error(blocked), { status: 429, quota: true });
         for (let i = 0; ; i++) {
             try { return await send(path, body, key); }
             catch (error) {
-                if (!(error.status === 429 || error.status >= 500) || i >= WAITS.length) throw error;
-                await sleep(WAITS[i]);
+                rememberQuota(model, error);
+                if (error.quota || !(error.status === 429 || error.status >= 500) || i >= WAITS.length) throw error;
+                await sleep(error.wait > 0 ? error.wait * 1000 + 500 : WAITS[i]); // 분당 한도는 구글이 알려 준 만큼만 기다린다.
             }
         }
     }
@@ -328,6 +371,8 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         say('키 확인 중…');
         try { await send(`/models/${model}`, null, value); }
         catch (error) { return say('키를 저장하지 않았습니다. ' + error.message, true); }
+        const blocked = quotaBlock(model);
+        if (blocked) { GM_setValue('apiKey', value); return say('키는 맞습니다. ' + blocked, true); }
         GM_setValue('apiKey', value);
         say('키는 맞습니다. 음성 합성 시험 중…');
         try {
@@ -335,7 +380,8 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
             audioOf(await send('/interactions', ttsBody({ voices: [voice], turns: [{ voice, text: '네.', style }] }, model), value));
             say('정상입니다. 소리까지 받았습니다.');
         } catch (error) {
-            say('키는 저장했지만 음성 합성이 실패했습니다. ' + error.message, true);
+            rememberQuota(model, error);
+            say((error.quota ? '키는 맞습니다. ' : '키는 저장했지만 음성 합성이 실패했습니다. ') + error.message, true);
         }
     }
 
@@ -426,7 +472,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         if (pcmCache.has(key)) { heard(); pcmCache.get(key).forEach(c => schedule(c)); return; }
         const chunks = [];
         try {
-            if (!streamOff) await streamAudio(body, pcm => {
+            if (!streamOff && !quotaBlock(model)) await streamAudio(body, pcm => {
                 if (run !== play.run) return;
                 chunks.push(pcm);
                 heard();
@@ -473,6 +519,8 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
 
     async function requestsFor(id, lines) {
         const set = settings();
+        const blocked = quotaBlock(set.model); // 화자 구분 요청도 아끼려고 먼저 본다.
+        if (blocked) throw new Error(blocked);
         const parts = parseLines(lines, skipRe());
         if (!parts.length) throw new Error('읽을 글이 없습니다');
         const cast = loadCast();
