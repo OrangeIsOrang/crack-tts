@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 TTS
 // @namespace    crack-tts
-// @version      0.2.0
+// @version      0.3.0
 // @description  크랙 답변을 Gemini 3.8 TTS로 읽습니다. 나레이션과 등장인물 음성을 나누고 목소리를 직접 꾸밀 수 있습니다.
 // @license      GPL-3.0
 // @homepageURL  https://github.com/OrangeIsOrang/crack-tts
@@ -209,15 +209,31 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         return Array.isArray(json) ? json[0] : json; // /interactions는 오류를 배열로 감싸 보낸다.
     }
 
+    // 받은 글 조각 → 완성된 data: 줄의 이벤트들과 아직 덜 온 나머지
+    function takeEvents(buf) {
+        const lines = buf.split('\n');
+        const rest = lines.pop();
+        return { events: lines.filter(l => l.startsWith('data:')).map(l => parseReply(l.slice(5).trim())).filter(Boolean), rest };
+    }
+
+    // 16비트 소리가 조각 경계에서 어긋나지 않게 홀수 바이트는 다음 조각으로 넘긴다.
+    function evenPcm(carry, bytes) {
+        const all = new Uint8Array(carry.length + bytes.length);
+        all.set(carry);
+        all.set(bytes, carry.length);
+        const n = all.length & ~1;
+        return { pcm: all.subarray(0, n), carry: all.subarray(n) };
+    }
+
     if (typeof document === 'undefined') {
-        module.exports = { parseLines, parseLabels, isHud, turnsOf, splitLong, assignVoice, resolveVoice, batch, ttsBody, pcmOf, audioOf, parseReply, NARR, FALLBACK, MAX_BYTES, VOICES };
+        module.exports = { parseLines, parseLabels, isHud, turnsOf, splitLong, assignVoice, resolveVoice, batch, ttsBody, pcmOf, audioOf, parseReply, takeEvents, evenPcm, NARR, FALLBACK, MAX_BYTES, VOICES };
         return;
     }
 
     // ── 여기부터 브라우저 ──
 
     const sleep = ms => new Promise(r => setTimeout(r, ms));
-    const settings = () => ({ model: MODELS[0][0], narrator: 'Aoede', narrStyle: NARR_STYLE, skip: '', ...GM_getValue('set', {}) });
+    const settings = () => ({ model: MODELS[0][0], narrator: 'Aoede', narrStyle: NARR_STYLE, skip: '', read: 'all', ...GM_getValue('set', {}) });
     const saveSettings = patch => GM_setValue('set', { ...settings(), ...patch });
     const storyKey = () => 'cast:' + (/\/(?:stories|characters)\/([a-f0-9]+)/.exec(location.pathname)?.[1] ?? 'etc');
     const loadCast = () => GM_getValue(storyKey(), {});
@@ -283,7 +299,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         const j = await api(`/models/${LABEL_MODEL}:generateContent`, {
             systemInstruction: { parts: [{ text: LABEL_SYSTEM }] },
             contents: [{ role: 'user', parts: [{ text: `KNOWN SPEAKERS: ${known}\n\nTEXT:\n${text}` }] }],
-            generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+            generationConfig: { temperature: 0, responseMimeType: 'application/json', thinkingConfig: { thinkingLevel: 'low' } }, // 화자 구분은 생각을 줄여 빠르게
             safetySettings: ['HATE_SPEECH', 'DANGEROUS_CONTENT', 'SEXUALLY_EXPLICIT', 'HARASSMENT'].map(c => ({ category: 'HARM_CATEGORY_' + c, threshold: 'OFF' })),
         });
         const out = (j?.candidates?.[0]?.content?.parts ?? []).map(p => p.text ?? '').join('');
@@ -300,6 +316,50 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         return value;
     }
 
+    // 소리를 받는 대로 넘긴다. 스트림을 못 쓰는 환경이나 오류로 소리 없이 끝나면 부른 쪽이 일반 요청으로 다시 보낸다.
+    let streamOff = false;
+    function streamAudio(body, onPcm, stopped) {
+        return new Promise((ok, fail) => {
+            let reading = false;
+            GM_xmlhttpRequest({
+                method: 'POST', url: API_URL + '/interactions', timeout: 180000, responseType: 'stream',
+                headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GM_getValue('apiKey', '') },
+                data: JSON.stringify({ ...body, stream: true }),
+                onloadstart: async r => {
+                    const reader = r.response?.getReader?.();
+                    if (!reader) { streamOff = true; return; } // 안 되는 환경이면 이번 접속 동안 다시 시도하지 않는다(요금 중복 방지).
+                    reading = true;
+                    const dec = new TextDecoder();
+                    let buf = '', carry = new Uint8Array(0);
+                    const handle = events => {
+                        for (const ev of events) {
+                            if (ev.event_type === 'error') throw new Error(ev.error?.message || '음성 합성 오류');
+                            if (ev.event_type !== 'step.delta' || ev.delta?.type !== 'audio' || !ev.delta.data) continue;
+                            const even = evenPcm(carry, unb64(ev.delta.data));
+                            carry = even.carry;
+                            if (even.pcm.length) onPcm(even.pcm);
+                        }
+                    };
+                    try {
+                        for (;;) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            if (stopped()) { reader.cancel().catch(() => {}); break; }
+                            const got = takeEvents(buf + dec.decode(value, { stream: true }));
+                            buf = got.rest;
+                            handle(got.events);
+                        }
+                        handle(takeEvents(buf + '\n').events);
+                        ok();
+                    } catch (error) { fail(error); }
+                },
+                onload: () => setTimeout(() => { if (!reading) ok(); }, 0),
+                onerror: () => { if (!reading) ok(); },
+                ontimeout: () => { if (!reading) ok(); },
+            });
+        });
+    }
+
     async function synth(r, model) {
         const body = ttsBody(r, model);
         const key = JSON.stringify(body);
@@ -314,6 +374,29 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         }
     }
 
+    // 조각이 도착하는 대로 재생을 예약하고, 다 받으면 다시 듣기용으로 보관한다.
+    async function deliver(r, model, run, heard) {
+        const body = ttsBody(r, model), key = JSON.stringify(body);
+        if (pcmCache.has(key)) { heard(); pcmCache.get(key).forEach(c => schedule(c)); return; }
+        const chunks = [];
+        try {
+            if (!streamOff) await streamAudio(body, pcm => {
+                if (run !== play.run) return;
+                chunks.push(pcm);
+                heard();
+                schedule({ pcm, rate: RATE }, 0);
+            }, () => run !== play.run);
+        } catch (error) {
+            if (chunks.length) throw error; // 이미 소리가 나간 뒤면 다시 보내지 않는다.
+        }
+        if (run !== play.run) return;
+        if (!chunks.length) return (await synth(r, model)).forEach(c => schedule(c));
+        play.at += GAP;
+        const pcm = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+        chunks.reduce((at, c) => (pcm.set(c, at), at + c.length), 0);
+        remember(pcmCache, key, [{ pcm, rate: RATE }]);
+    }
+
     const play = { ctx: null, at: 0, srcs: [], btn: null, run: 0 };
     function stop() {
         play.run++;
@@ -323,7 +406,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         if (play.btn) setBtn(play.btn, 'play');
         play.btn = null;
     }
-    function schedule({ pcm, rate }) {
+    function schedule({ pcm, rate }, gap = GAP) {
         const n = pcm.length >> 1, buf = play.ctx.createBuffer(1, n, rate), ch = buf.getChannelData(0);
         const dv = new DataView(pcm.buffer, pcm.byteOffset, pcm.length);
         for (let i = 0; i < n; i++) ch[i] = dv.getInt16(i * 2, true) / 32768;
@@ -332,9 +415,8 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         src.connect(play.ctx.destination);
         const at = Math.max(play.at, play.ctx.currentTime + 0.05);
         src.start(at);
-        play.at = at + buf.duration + GAP;
+        play.at = at + buf.duration + gap;
         play.srcs.push(src);
-        return src;
     }
 
     function linesOf(md) {
@@ -368,7 +450,9 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
             assignVoice(cast, s, genderOf.get(s) ?? 'unknown', set.narrator);
             return castVoice(cast[s], mine);
         };
-        const reqs = batch(turnsOf(parts, labels), speak);
+        const turns = turnsOf(parts, labels).filter(t => set.read !== 'talk' || t.speaker !== NARR);
+        if (!turns.length) throw new Error('읽을 대사가 없습니다');
+        const reqs = batch(turns, speak);
         saveCast(cast);
         return { reqs, model: set.model };
     }
@@ -384,17 +468,15 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
             await play.ctx.resume();
             const id = md.closest('[data-message-group-id]').getAttribute('data-message-group-id');
             const { reqs, model } = await requestsFor(id, linesOf(md));
-            let last = null;
-            // ponytail: 요청 단위 재생이라 첫 소리까지 한 묶음 합성 시간이 걸린다. 길면 스트리밍 합성으로.
+            const heard = () => { if (run === play.run && btn.dataset.state === 'load') setBtn(btn, 'stop'); };
             for (const [i, r] of reqs.entries()) {
                 if (run !== play.run) return;
-                setBtn(btn, 'load', `${i + 1}/${reqs.length}`);
-                const clips = await synth(r, model);
-                if (run !== play.run) return;
-                for (const c of clips) last = schedule(c);
+                if (btn.dataset.state === 'load') setBtn(btn, 'load', `${i + 1}/${reqs.length}`);
+                await deliver(r, model, run, heard);
             }
+            if (run !== play.run) return;
             setBtn(btn, 'stop');
-            last.onended = () => { if (run === play.run) stop(); };
+            setTimeout(() => { if (run === play.run) stop(); }, (play.at - play.ctx.currentTime) * 1000);
         } catch (error) {
             if (run !== play.run) return;
             stop();
@@ -408,7 +490,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
             stop();
             play.ctx ??= new AudioContext();
             await play.ctx.resume();
-            (await synth({ voices: [voice], turns: [{ voice, text, style }] }, settings().model)).forEach(schedule);
+            (await synth({ voices: [voice], turns: [{ voice, text, style }] }, settings().model)).forEach(c => schedule(c));
         } catch (error) {
             toast(error.message, true);
         }
@@ -557,12 +639,16 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         } });
         const model = el('select', { onchange: () => saveSettings({ model: model.value }), attrs: { 'aria-label': '모델' } }, ...MODELS.map(([value, textContent]) => el('option', { value, textContent })));
         model.value = set.model;
+        const reading = el('select', { onchange: () => saveSettings({ read: reading.value }), attrs: { 'aria-label': '읽을 범위' } },
+            el('option', { value: 'all', textContent: '전체 읽기 · 나레이션과 대사' }), el('option', { value: 'talk', textContent: '대사만 읽기 · 나레이션 건너뜀' }));
+        reading.value = set.read;
         const skip = el('input', { value: set.skip, placeholder: '예: ^T\\d+', onchange: () => saveSettings({ skip: skip.value }), attrs: { 'aria-label': '읽지 않을 줄' } });
         return [
             el('h3', { textContent: '설정' }),
             el('section', { className: 'ctts-card' },
                 el('div', { className: 'ctts-field' }, el('span', { className: 'ctts-label', textContent: 'API 키' }), el('div', { className: 'ctts-inline' }, key, check), note, el('small', { textContent: '확인을 누르면 짧은 음성 합성을 한 번 보냅니다. 키는 이 브라우저의 Tampermonkey 저장소에만 둡니다.' })),
-                field('모델', model),
+                field('읽을 범위', reading, '대사만 읽으면 기다리는 시간과 요금이 크게 줄어듭니다.'),
+                field('모델', model, 'Flash Lite는 구글이 읽어 주기 기능에 권하는 빠른 모델입니다.'),
                 field('읽지 않을 줄', skip, '상태창처럼 읽지 말아야 할 줄이 들리면 정규식으로 적어 주세요.')),
         ];
     }
