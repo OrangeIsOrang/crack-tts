@@ -31,4 +31,4 @@
 
 ## 라이선스
 
-GPL-3.0. 대사 나누기·요청 묶기·「내 목소리」 방식은 [이매진](https://github.com/daelar99-rgb/imagine)(GPL-3.0)을 옮겨 줄였습니다.
+GPL-3.0
