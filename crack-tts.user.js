@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 TTS
 // @namespace    crack-tts
-// @version      0.5.1
+// @version      0.5.2
 // @description  크랙 답변을 Gemini 3.8 TTS로 읽습니다. 나레이션과 등장인물 음성을 나누고 목소리를 직접 꾸밀 수 있습니다.
 // @license      GPL-3.0
 // @homepageURL  https://github.com/OrangeIsOrang/crack-tts
@@ -702,13 +702,25 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         a.style.background = `hsl(${hue} 42% 36%)`;
         return a;
     }
-    const card = (head, ...body) => el('section', { className: 'ctts-card' }, el('div', { className: 'ctts-card-head' }, ...head), ...body);
+    // 카드는 머리 줄만 보이게 접혀 있다. 펼친 카드는 패널을 다시 그려도 펼친 채로 둔다.
+    const opened = new Set();
+    function card(key, head, ...body) {
+        const inner = el('div', { className: 'ctts-card-body', hidden: !opened.has(key) }, ...body);
+        const fold = iconBtn('next', '자세히', () => {
+            inner.hidden = !inner.hidden;
+            inner.hidden ? opened.delete(key) : opened.add(key);
+            fold.setAttribute('aria-expanded', !inner.hidden);
+        }, 'ctts-fold');
+        fold.setAttribute('aria-expanded', !inner.hidden);
+        return el('section', { className: 'ctts-card' },
+            el('div', { className: 'ctts-card-head', onclick: e => { if (!e.target.closest('button, input')) fold.click(); } }, ...head, fold), inner);
+    }
 
     function narratorCard() {
         const n = loadNarr();
         const s = voicePicker({ value: n.voice, title: '나레이션', styles: [n.style], sample: SAMPLE_NARR, self: '나레이션', onPick: voice => saveNarr({ voice }) });
         const say = iconBtn('play', '나레이션 들어 보기', () => preview(narrVoice(), SAMPLE_NARR, say));
-        return card([avatar('나'), el('strong', { textContent: '나레이션' }), el('span', { className: 'ctts-tag', textContent: '따옴표 밖 글' }), say],
+        return card('narr', [avatar('나'), el('strong', { textContent: '나레이션' }), el('span', { className: 'ctts-tag', textContent: '따옴표 밖 글' }), say],
             field('목소리', s), field('말투', styleBox(n.style, style => saveNarr({ style }), '예: 낮고 차분하게, 소설을 낭독하듯')));
     }
 
@@ -717,7 +729,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         const s = voicePicker({ value: c.voice, title: name, gender: c.gender, styles: [TALK_STYLE, c.style], sample: SAMPLE_TALK, self: name, onPick: voice => patch({ voice }) });
         const say = iconBtn('play', name + ' 들어 보기', () => preview(castVoice(loadCast()[name]), SAMPLE_TALK, say));
         const del = iconBtn('trash', name + ' 삭제', () => { const all = loadCast(); delete all[name]; saveCast(all); panel.show('cast'); }, 'ctts-danger');
-        return card([avatar(name), el('strong', { textContent: name }), el('span', { className: 'ctts-tag', textContent: { female: '여성', male: '남성' }[c.gender] ?? '성별 모름' }), say, del],
+        return card('cast:' + name, [avatar(name), el('strong', { textContent: name }), el('span', { className: 'ctts-tag', textContent: { female: '여성', male: '남성' }[c.gender] ?? '성별 모름' }), say, del],
             field('목소리', s), field('이 인물만의 말투', styleBox(c.style ?? '', style => patch({ style }), '예: 20대 초반, 말끝을 살짝 끄는 버릇')));
     }
 
@@ -737,14 +749,16 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         const name = el('input', { value: m.name, maxLength: 24, onchange: () => patch({ name: name.value.trim() || '이름 없음' }), attrs: { 'aria-label': '목소리 이름' } });
         const say = iconBtn('play', m.name + ' 들어 보기', () => { const now = loadMine().find(x => x.id === m.id); preview(resolveVoice(now.id, [TALK_STYLE], [now]), SAMPLE_TALK, say); });
         const del = iconBtn('trash', m.name + ' 삭제', () => { saveMine(loadMine().filter(x => x.id !== m.id)); panel.show('mine'); }, 'ctts-danger');
-        return card([avatar(m.name), name, say, del],
+        return card('mine:' + m.id, [avatar(m.name), name, say, del],
             field('바탕 목소리', voicePicker({ value: m.base, title: m.name + ' 바탕', styles: [TALK_STYLE, m.style], sample: SAMPLE_TALK, withMine: false, onPick: base => patch({ base }) })),
             field('말투 지시', styleBox(m.style, style => patch({ style }), '예: 30대 여성, 낮고 느리게, 문장 끝을 살짝 내림')));
     }
 
     function mineTab() {
         const add = el('button', { type: 'button', className: 'ctts-primary', onclick: () => {
-            saveMine([...loadMine(), { id: 'my_' + Date.now().toString(36), name: '새 목소리', base: 'Aoede', style: '' }]);
+            const id = 'my_' + Date.now().toString(36);
+            opened.add('mine:' + id);
+            saveMine([...loadMine(), { id, name: '새 목소리', base: 'Aoede', style: '' }]);
             panel.show('mine');
         } }, icon('plus'), '새 목소리');
         const mine = loadMine();
@@ -931,7 +945,11 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         .ctts-empty { padding: 28px 12px; color: var(--text_tertiary, #85837d); font-size: 14px; text-align: center; }
         .ctts-card { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; padding: 14px; border: 1px solid var(--outline_secondary, rgba(128,128,128,.25)); border-radius: 12px; background: var(--bg_elevated_secondary, #2e2d2b); }
         .ctts-main > h3 + .ctts-card { margin-top: 14px; }
-        .ctts-card-head { display: flex; align-items: center; gap: 8px; min-height: 34px; }
+        .ctts-card-head { display: flex; align-items: center; gap: 8px; min-height: 34px; cursor: pointer; }
+        .ctts-card-body { display: flex; flex-direction: column; gap: 12px; }
+        .ctts-card-body[hidden] { display: none; }
+        .ctts-fold .ctts-ico { transition: transform .15s; }
+        .ctts-fold[aria-expanded="true"] .ctts-ico { transform: rotate(90deg); }
         .ctts-card-head strong { overflow: hidden; font-size: 15px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
         .ctts-card-head input { flex: 1; min-width: 0; font-weight: 700; }
         .ctts-card-head .ctts-icon-btn:first-of-type { margin-left: auto; }
