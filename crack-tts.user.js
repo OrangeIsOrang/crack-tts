@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 TTS
 // @namespace    crack-tts
-// @version      0.5.4
+// @version      0.6.0
 // @description  크랙 답변을 Gemini 3.8 TTS로 읽습니다. 나레이션과 등장인물 음성을 나누고 목소리를 직접 꾸밀 수 있습니다.
 // @license      GPL-3.0
 // @homepageURL  https://github.com/OrangeIsOrang/crack-tts
@@ -266,6 +266,20 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         return { pcm: bytes.subarray(44), rate };
     }
 
+    // 읽은 소리를 WAV 파일 하나로: 16비트 PCM 조각과 쉼(초, 숫자)을 순서대로 이어 붙인다.
+    function wavOf(pieces, rate = RATE) {
+        const parts = pieces.map(p => typeof p === 'number' ? new Uint8Array(Math.round(p * rate) * 2) : p);
+        const size = parts.reduce((n, p) => n + p.length, 0);
+        const out = new Uint8Array(44 + size), dv = new DataView(out.buffer);
+        const tag = (at, s) => [...s].forEach((c, i) => { out[at + i] = c.charCodeAt(0); });
+        tag(0, 'RIFF'); dv.setUint32(4, 36 + size, true); tag(8, 'WAVE'); tag(12, 'fmt ');
+        dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+        dv.setUint32(24, rate, true); dv.setUint32(28, rate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+        tag(36, 'data'); dv.setUint32(40, size, true);
+        parts.reduce((at, p) => (out.set(p, at), at + p.length), 44);
+        return out;
+    }
+
     function audioOf(j) {
         const audio = (j?.steps ?? []).filter(x => x.type === 'model_output').flatMap(x => x.content ?? []).filter(c => c.type === 'audio' && c.data).pop();
         if (audio) return [pcmOf(unb64(audio.data), audio.mime_type)];
@@ -318,14 +332,14 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
     }
 
     if (typeof document === 'undefined') {
-        module.exports = { parseLines, parseLabels, isHud, turnsOf, splitLong, assignVoice, resolveVoice, batch, ttsBody, pcmOf, audioOf, parseReply, takeEvents, evenPcm, makeShare, parseShare, voiceInfo, quotaOf, quotaMessage, leftText, NARR, FALLBACK, MAX_BYTES, VOICES };
+        module.exports = { parseLines, parseLabels, isHud, turnsOf, splitLong, assignVoice, resolveVoice, batch, ttsBody, pcmOf, wavOf, audioOf, parseReply, takeEvents, evenPcm, makeShare, parseShare, voiceInfo, quotaOf, quotaMessage, leftText, NARR, FALLBACK, MAX_BYTES, VOICES };
         return;
     }
 
     // ── 여기부터 브라우저 ──
 
     const sleep = ms => new Promise(r => setTimeout(r, ms));
-    const settings = () => ({ model: MODELS[0][0], narrator: 'Aoede', narrStyle: NARR_STYLE, skip: '', read: 'all', ...GM_getValue('set', {}) });
+    const settings = () => ({ model: MODELS[0][0], narrator: 'Aoede', narrStyle: NARR_STYLE, skip: '', read: 'all', save: 'off', ...GM_getValue('set', {}) });
     const saveSettings = patch => GM_setValue('set', { ...settings(), ...patch });
     const storyId = () => /\/(?:stories|characters)\/([a-f0-9]+)/.exec(location.pathname)?.[1];
     const storyKey = () => 'cast:' + (storyId() ?? 'etc');
@@ -520,17 +534,19 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         if (run !== play.run) return;
         if (!chunks.length) return (await synth(r, model)).forEach(c => schedule(c));
         play.at += GAP;
+        play.rec?.push(GAP);
         const pcm = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
         chunks.reduce((at, c) => (pcm.set(c, at), at + c.length), 0);
         remember(pcmCache, key, [{ pcm, rate: RATE }]);
     }
 
-    const play = { ctx: null, at: 0, srcs: [], btn: null, run: 0 };
+    const play = { ctx: null, at: 0, srcs: [], btn: null, run: 0, rec: null };
     function stop() {
         play.run++;
         for (const s of play.srcs) try { s.stop(); } catch {}
         play.srcs = [];
         play.at = 0;
+        play.rec = null;
         if (play.btn) setBtn(play.btn, 'play');
         play.btn = null;
     }
@@ -545,6 +561,19 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         src.start(at);
         play.at = at + buf.duration + gap;
         play.srcs.push(src);
+        if (play.rec) { play.rec.push(pcm); if (gap) play.rec.push(gap); }
+    }
+
+    // 다 읽은 답변의 소리를 「작품 제목_날짜_시각.wav」로 내려받는다.
+    function saveWav(pieces) {
+        const d = new Date(), p = n => String(n).padStart(2, '0');
+        const title = document.title.replace(/\s*\|\s*크랙\s*$/, '').replace(/[\\/:*?"<>|]/g, '').trim().slice(0, 40) || '크랙';
+        const a = el('a', { href: URL.createObjectURL(new Blob([wavOf(pieces)], { type: 'audio/wav' })),
+            download: `${title}_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.wav` });
+        document.body.append(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 60000);
     }
 
     function linesOf(md) {
@@ -593,6 +622,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         const run = play.run;
         play.ctx ??= new AudioContext();
         play.btn = btn;
+        play.rec = settings().save === 'wav' ? [] : null; // 저장을 켜면 재생하는 소리를 모아 둔다
         setBtn(btn, 'load', '준비');
         try {
             await play.ctx.resume();
@@ -606,6 +636,8 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
             }
             if (run !== play.run) return;
             setBtn(btn, 'stop');
+            if (play.rec?.length) saveWav(play.rec); // 끝까지 받은 답변만 저장한다(중간에 멈추면 stop이 비운다)
+            play.rec = null;
             setTimeout(() => { if (run === play.run) stop(); }, (play.at - play.ctx.currentTime) * 1000);
         } catch (error) {
             if (run !== play.run) return;
@@ -825,13 +857,17 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
             el('option', { value: 'all', textContent: '전체 읽기 · 나레이션과 대사' }), el('option', { value: 'talk', textContent: '대사만 읽기 · 나레이션 건너뜀' }));
         reading.value = set.read;
         const skip = el('input', { value: set.skip, placeholder: '예: ^T\\d+', onchange: () => saveSettings({ skip: skip.value }), attrs: { 'aria-label': '읽지 않을 줄' } });
+        const save = el('select', { onchange: () => saveSettings({ save: save.value }), attrs: { 'aria-label': '음성 저장' } },
+            el('option', { value: 'off', textContent: '저장 안 함' }), el('option', { value: 'wav', textContent: '읽은 음성을 WAV 파일로 저장' }));
+        save.value = set.save;
         return [
             el('h3', { textContent: '설정' }),
             el('section', { className: 'ctts-card' },
                 el('div', { className: 'ctts-field' }, el('span', { className: 'ctts-label', textContent: 'API 키' }), el('div', { className: 'ctts-inline' }, key, check), note, el('small', { textContent: '확인을 누르면 짧은 음성 합성을 한 번 보냅니다. 키는 이 브라우저의 Tampermonkey 저장소에만 둡니다.' })),
                 field('읽을 범위', reading, '대사만 읽으면 기다리는 시간과 요금이 크게 줄어듭니다.'),
                 field('모델', model, 'Flash Lite는 구글이 읽어 주기 기능에 권하는 빠른 모델입니다.'),
-                field('읽지 않을 줄', skip, '상태창처럼 읽지 말아야 할 줄이 들리면 정규식으로 적어 주세요.')),
+                field('읽지 않을 줄', skip, '상태창처럼 읽지 말아야 할 줄이 들리면 정규식으로 적어 주세요.'),
+                field('음성 저장', save, '켜 두면 답변을 끝까지 읽을 때마다 음성을 브라우저 다운로드 폴더에 저장합니다. 중간에 멈추면 저장하지 않습니다.')),
         ];
     }
 
