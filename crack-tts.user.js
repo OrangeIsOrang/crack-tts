@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 TTS
 // @namespace    crack-tts
-// @version      0.5.3
+// @version      0.5.4
 // @description  크랙 답변을 Gemini 3.8 TTS로 읽습니다. 나레이션과 등장인물 음성을 나누고 목소리를 직접 꾸밀 수 있습니다.
 // @license      GPL-3.0
 // @homepageURL  https://github.com/OrangeIsOrang/crack-tts
@@ -444,13 +444,15 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
     let streamOff = false;
     function streamAudio(body, onPcm, stopped) {
         return new Promise((ok, fail) => {
-            let reading = false;
+            let reading = false, reader = null, finished = false;
+            // 연결이 끊겼는데 스트림이 끝 신호를 안 주면 읽기를 끊어 기다림을 푼다(버튼이 「멈춤」에 남던 문제).
+            const release = () => reader?.cancel().catch(() => {});
             GM_xmlhttpRequest({
                 method: 'POST', url: API_URL + '/interactions', timeout: 180000, responseType: 'stream',
                 headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GM_getValue('apiKey', '') },
                 data: JSON.stringify({ ...body, stream: true }),
                 onloadstart: async r => {
-                    const reader = r.response?.getReader?.();
+                    reader = r.response?.getReader?.();
                     if (!reader) { streamOff = true; return; } // 안 되는 환경이면 이번 접속 동안 다시 시도하지 않는다(요금 중복 방지).
                     reading = true;
                     const dec = new TextDecoder();
@@ -458,6 +460,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
                     const handle = events => {
                         for (const ev of events) {
                             if (ev.event_type === 'error') throw new Error(ev.error?.message || '음성 합성 오류');
+                            if (ev.event_type === 'interaction.completed') finished = true; // 구글이 다 보냈다는 신호
                             if (ev.event_type !== 'step.delta' || ev.delta?.type !== 'audio' || !ev.delta.data) continue;
                             const even = evenPcm(carry, unb64(ev.delta.data));
                             carry = even.carry;
@@ -472,14 +475,15 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
                             const got = takeEvents(buf + dec.decode(value, { stream: true }));
                             buf = got.rest;
                             handle(got.events);
+                            if (finished) { reader.cancel().catch(() => {}); break; }
                         }
-                        handle(takeEvents(buf + '\n').events);
+                        if (!finished) handle(takeEvents(buf + '\n').events);
                         ok();
                     } catch (error) { fail(error); }
                 },
                 onload: () => setTimeout(() => { if (!reading) ok(); }, 0),
-                onerror: () => { if (!reading) ok(); },
-                ontimeout: () => { if (!reading) ok(); },
+                onerror: () => { if (!reading) ok(); else release(); },
+                ontimeout: () => { if (!reading) ok(); else release(); },
             });
         });
     }
