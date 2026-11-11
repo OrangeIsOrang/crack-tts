@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 TTS
 // @namespace    crack-tts
-// @version      0.5.2
+// @version      0.5.3
 // @description  크랙 답변을 Gemini 3.8 TTS로 읽습니다. 나레이션과 등장인물 음성을 나누고 목소리를 직접 꾸밀 수 있습니다.
 // @license      GPL-3.0
 // @homepageURL  https://github.com/OrangeIsOrang/crack-tts
@@ -72,16 +72,48 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         return line.length < 40 && /^\S{1,8}\s*[:：]/.test(line) && !SENTENCE_END.test(line);
     }
 
+    // 따옴표가 줄을 넘겨 이어지면(여러 줄 대사) 닫힐 때까지 한 줄로 붙인다. 안 닫히는 따옴표가 뒤를 다 삼키지 않게 12줄까지만.
+    const QUOTE_PAIRS = [['“', '”'], ['「', '」'], ['『', '』']];
+    const isOpen = s => (s.match(/"/g)?.length ?? 0) % 2 === 1 || QUOTE_PAIRS.some(([a, b]) => s.split(a).length > s.split(b).length);
+    function joinQuotes(lines) {
+        const out = [];
+        let joined = 0;
+        for (const raw of lines) {
+            const line = raw.trim();
+            if (out.length && joined < 12 && isOpen(out[out.length - 1])) { out[out.length - 1] += ' ' + line; joined++; }
+            else { out.push(line); joined = 0; }
+        }
+        return out;
+    }
+
+    // 이름표 줄: 「이름 | 대사」, 「💬이름｜"대사"」, 「이름: "대사"」
+    const LABEL_RE = /^([\p{Extended_Pictographic}️\s]*)([가-힣A-Za-z]{1,10})[\p{Extended_Pictographic}️]*\s*([|｜:：])\s*(.+)$/u;
+    const LEAD_QUOTE = /^(“[^”]*”|"[^"]*"|「[^」]*」|『[^』]*』|‘[^’]*’)/;
+    function labelOf(line) {
+        const m = LABEL_RE.exec(line);
+        if (!m || !spoken(m[4])) return null;
+        const [, lead, speaker, sep, body] = m;
+        const pipe = sep === '|' || sep === '｜';
+        if (pipe && /[|｜]/.test(body)) return null; // 「A | B | C」 같은 표·상태 줄
+        // 예전 「이름 | 대사」는 그대로 받고, 이모지로 시작하거나 콜론인 줄은 대사처럼 보일 때만 받는다(상태 줄 오인 방지).
+        if (!(pipe && !lead.trim()) && !LEAD_QUOTE.test(body) && !SENTENCE_END.test(body)) return null;
+        return { speaker, body: body.trim() };
+    }
+
     // 줄 → [{q:0, text} 나레이션 | {q:n, text, speaker?} 대사]
     function parseLines(lines, skip) {
         const parts = [];
         let n = 0;
         const narr = text => { text = text.trim(); if (spoken(text)) parts.push({ q: 0, text }); };
-        for (const raw of lines) {
-            const line = raw.trim();
-            const vn = /^([가-힣A-Za-z]{1,10})[\p{Extended_Pictographic}️]*\s*[|｜]\s*([^|｜]+)$/u.exec(line);
-            if (vn && spoken(vn[2])) { parts.push({ q: ++n, text: vn[2].trim(), speaker: vn[1] }); continue; }
-            if (!line || isHud(line) || skip?.test(line)) continue;
+        for (let line of joinQuotes(lines)) {
+            const label = labelOf(line);
+            if (label) {
+                const lead = LEAD_QUOTE.exec(label.body);
+                if (!lead) { parts.push({ q: ++n, text: label.body, speaker: label.speaker }); continue; }
+                parts.push({ q: ++n, text: lead[1], speaker: label.speaker });
+                line = label.body.slice(lead[1].length).trim(); // 대사 뒤에 붙은 나레이션·다른 대사는 아래에서 보통처럼 나눈다
+                if (!line) continue;
+            } else if (!line || isHud(line) || skip?.test(line)) continue;
             let last = 0;
             for (const m of line.matchAll(QUOTE_RE)) {
                 narr(line.slice(last, m.index));
