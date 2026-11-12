@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 TTS
 // @namespace    crack-tts
-// @version      0.6.0
+// @version      0.6.1
 // @description  크랙 답변을 Gemini 3.8 TTS로 읽습니다. 나레이션과 등장인물 음성을 나누고 목소리를 직접 꾸밀 수 있습니다.
 // @license      GPL-3.0
 // @homepageURL  https://github.com/OrangeIsOrang/crack-tts
@@ -90,6 +90,8 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
     const LABEL_RE = /^([\p{Extended_Pictographic}️\s]*)([가-힣A-Za-z]{1,10})[\p{Extended_Pictographic}️]*\s*([|｜:：])\s*(.+)$/u;
     const LEAD_QUOTE = /^(“[^”]*”|"[^"]*"|「[^」]*」|『[^』]*』|‘[^’]*’)/;
     function labelOf(line) {
+        const br = /^[[【]([가-힣A-Za-z]{1,10})[\]】]\s*(.+)$/u.exec(line); // 「[이름] 『대사』」: 따옴표로 시작할 때만(「[상태] …」 오인 방지)
+        if (br && LEAD_QUOTE.test(br[2]) && spoken(br[2])) return { speaker: br[1], body: br[2].trim() };
         const m = LABEL_RE.exec(line);
         if (!m || !spoken(m[4])) return null;
         const [, lead, speaker, sep, body] = m;
