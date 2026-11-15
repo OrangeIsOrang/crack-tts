@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 TTS
 // @namespace    crack-tts
-// @version      0.6.3
+// @version      0.6.4
 // @description  크랙 답변을 Gemini 3.8 TTS로 읽습니다. 나레이션과 등장인물 음성을 나누고 목소리를 직접 꾸밀 수 있습니다.
 // @license      GPL-3.0
 // @homepageURL  https://github.com/OrangeIsOrang/crack-tts
@@ -936,7 +936,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
             copy.disabled = false;
             size.textContent = `코드 길이 ${out.value.length.toLocaleString()}자 · 등장인물 ${Object.keys(loadCast()).length}명`;
         } });
-        const size = el('small', { textContent: 'API 키는 코드에 들어가지 않습니다. 작품 상세 설명에 코드를 넣으면 독자가 찾기 버튼으로 받을 수 있습니다.' });
+        const size = el('small') // 코드를 만들면 길이·인물 수를 보여 준다;
         return [
             el('h3', { textContent: '목소리 공유' }),
             el('p', { className: 'ctts-desc', textContent: '공유받은 인물별 목소리를 적용하거나, 내 설정을 코드로 나눕니다.' }),
