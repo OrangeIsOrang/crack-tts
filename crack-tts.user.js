@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 TTS
 // @namespace    crack-tts
-// @version      0.6.1
+// @version      0.6.2
 // @description  크랙 답변을 Gemini 3.8 TTS로 읽습니다. 나레이션과 등장인물 음성을 나누고 목소리를 직접 꾸밀 수 있습니다.
 // @license      GPL-3.0
 // @homepageURL  https://github.com/OrangeIsOrang/crack-tts
@@ -901,7 +901,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
                 el('button', { type: 'button', className: 'ctts-primary', textContent: '이 작품에 적용', onclick: () => {
                     applyShare(share);
                     panel.show('cast');
-                    toast('제작자 목소리를 적용했습니다');
+                    toast('공유받은 목소리를 적용했습니다');
                 } }));
         };
         const find = el('button', { type: 'button', className: 'ctts-primary', textContent: '이 작품에서 찾기', onclick: async () => {
@@ -925,8 +925,8 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         const size = el('small', { textContent: 'API 키는 코드에 들어가지 않습니다. 작품 상세 설명에 코드를 넣으면 독자가 찾기 버튼으로 받을 수 있습니다.' });
         return [
             el('h3', { textContent: '목소리 공유' }),
-            el('p', { className: 'ctts-desc', textContent: '제작자가 정한 인물별 목소리를 받아 오거나, 내 설정을 코드로 나눕니다.' }),
-            el('section', { className: 'ctts-card' }, el('strong', { textContent: '제작자 목소리 받기' }),
+            el('p', { className: 'ctts-desc', textContent: '공유받은 인물별 목소리를 적용하거나, 내 설정을 코드로 나눕니다.' }),
+            el('section', { className: 'ctts-card' }, el('strong', { textContent: '목소리 공유받기' }),
                 el('div', { className: 'ctts-inline' }, find, load), paste, result,
                 el('small', { textContent: '적용하면 이 작품의 나레이션과 같은 이름의 인물 설정을 덮어씁니다.' })),
             el('section', { className: 'ctts-card' }, el('strong', { textContent: '내 설정 공유하기' }),
