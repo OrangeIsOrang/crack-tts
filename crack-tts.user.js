@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 TTS
 // @namespace    crack-tts
-// @version      0.6.2
+// @version      0.6.3
 // @description  크랙 답변을 Gemini 3.8 TTS로 읽습니다. 나레이션과 등장인물 음성을 나누고 목소리를 직접 꾸밀 수 있습니다.
 // @license      GPL-3.0
 // @homepageURL  https://github.com/OrangeIsOrang/crack-tts
@@ -390,6 +390,13 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         const tip = until.text.includes('결제') ? ' 결제를 연결하면 한도가 늘어납니다.' : '';
         return `${until.text.split('.')[0]}. ${leftText((until.at - Date.now()) / 1000)}에 다시 쓸 수 있습니다.${tip}`;
     }
+    // 하루 한도는 미국 태평양 자정에 풀리므로 그 날짜로 센다. 이 브라우저에서 보낸 음성 요청만 센다.
+    const pacificDay = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+    function countUse(model) {
+        if (!/-tts$/.test(model)) return;
+        const day = pacificDay(), u = GM_getValue('usage', {});
+        GM_setValue('usage', { ...(u.day === day ? u : {}), day, [model]: ((u.day === day && u[model]) || 0) + 1 });
+    }
     function rememberQuota(model, error) {
         if (!error.quota || !model) return;
         const all = GM_getValue('quota', {});
@@ -403,7 +410,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         const model = modelOf(path, body), blocked = quotaBlock(model);
         if (blocked) throw Object.assign(new Error(blocked), { status: 429, quota: true });
         for (let i = 0; ; i++) {
-            try { return await send(path, body, key); }
+            try { const out = await send(path, body, key); countUse(model); return out; }
             catch (error) {
                 rememberQuota(model, error);
                 if (error.quota || !(error.status === 429 || error.status >= 500) || i >= WAITS.length) throw error;
@@ -471,6 +478,7 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
                     reader = r.response?.getReader?.();
                     if (!reader) { streamOff = true; return; } // 안 되는 환경이면 이번 접속 동안 다시 시도하지 않는다(요금 중복 방지).
                     reading = true;
+                    if (!(r.status >= 400)) countUse(body.model);
                     const dec = new TextDecoder();
                     let buf = '', carry = new Uint8Array(0);
                     const handle = events => {
@@ -862,12 +870,18 @@ Each quote in TEXT is preceded by a tag like [Q3]. Reply with JSON only:
         const save = el('select', { onchange: () => saveSettings({ save: save.value }), attrs: { 'aria-label': '음성 저장' } },
             el('option', { value: 'off', textContent: '저장 안 함' }), el('option', { value: 'wav', textContent: '읽은 음성을 WAV 파일로 저장' }));
         save.value = set.save;
+        const u = GM_getValue('usage', {}), today = u.day === pacificDay() ? u : {};
+        const used = el('p', { className: 'ctts-note', textContent: '오늘 보낸 음성 요청: ' + MODELS.map(([id, name]) => `${name.split(' · ')[0]} ${today[id] ?? 0}건`).join(' · ') });
         return [
             el('h3', { textContent: '설정' }),
             el('section', { className: 'ctts-card' },
                 el('div', { className: 'ctts-field' }, el('span', { className: 'ctts-label', textContent: 'API 키' }), el('div', { className: 'ctts-inline' }, key, check), note, el('small', { textContent: '확인을 누르면 짧은 음성 합성을 한 번 보냅니다. 키는 이 브라우저의 Tampermonkey 저장소에만 둡니다.' })),
                 field('읽을 범위', reading, '대사만 읽으면 기다리는 시간과 요금이 크게 줄어듭니다.'),
                 field('모델', model, 'Flash Lite는 구글이 읽어 주기 기능에 권하는 빠른 모델입니다.'),
+                el('div', { className: 'ctts-field' }, el('span', { className: 'ctts-label', textContent: '하루 한도' }), used,
+                    el('small', { textContent: '구글 하루 한도는 답변 수나 음성 길이가 아니라 요청 건수로 셉니다. 확인된 값은 무료 등급 모델마다 10건, 유료 Tier 1 100건이고, 매일 한국 시간 오후 5시(여름엔 4시)에 초기화됩니다.' }),
+                    el('small', { textContent: '요청 1건에는 목소리 2개, 글 약 500자까지 담깁니다. 나레이션과 인물 한 명이면 읽기 한 번에 보통 1~2건이고, 인물이 여럿 번갈아 나오면 인물이 바뀔 때마다 1건씩 늘어납니다. 대사만 읽기를 고르면 크게 줄어듭니다. 읽는 중 버튼의 「1/3」이 이번 읽기의 요청 수입니다.' }),
+                    el('small', { textContent: '이 브라우저에서 보낸 것만 셉니다. 정확한 사용량은 AI Studio에서 확인하세요.' })),
                 field('읽지 않을 줄', skip, '상태창처럼 읽지 말아야 할 줄이 들리면 정규식으로 적어 주세요.'),
                 field('음성 저장', save, '켜 두면 답변을 끝까지 읽을 때마다 음성을 브라우저 다운로드 폴더에 저장합니다. 중간에 멈추면 저장하지 않습니다.')),
         ];
